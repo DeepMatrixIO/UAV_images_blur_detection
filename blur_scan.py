@@ -11,8 +11,9 @@ import datetime
 from os import path
 from geopy import distance
 import exiftool
-from cv2 import cv2
+import cv2
 import numpy
+import csv
 
 
 DATE_FORMAT = '%Y:%m:%d %H:%M:%S'
@@ -56,12 +57,12 @@ def compute_laplacian(image_path):
     inverse_speed = metadata['Composite:ShutterSpeed']
     speed = int(1/inverse_speed)
 
-    seuil = 330
-    somme_convertScaleAbs = int(var[0])+int(var[1])+int(var[2])+int(var[3])
+    threshold = 330
+    sum_convertScaleAbs = int(var[0])+int(var[1])+int(var[2])+int(var[3])
 
-    if (int(var[0])+int(var[1])+int(var[2])+int(var[3])) < seuil:
+    if (int(var[0])+int(var[1])+int(var[2])+int(var[3])) < threshold:
         text = 'Blurry'
-        print(F"{image_path}\tfm_crop {fm_crops[0]:.0f} {fm_crops[1]:.0f} {fm_crops[2]:.0f} {fm_crops[3]:.0f}\t convertScaleAbs: {somme_convertScaleAbs}\t speed: 1/{speed}\t{text}")
+        print(F"{image_path}\tfm_crop {fm_crops[0]:.0f} {fm_crops[1]:.0f} {fm_crops[2]:.0f} {fm_crops[3]:.0f}\t convertScaleAbs: {sum_convertScaleAbs}\t speed: 1/{speed}\t{text}")
         return 1
     return 0
 
@@ -71,26 +72,50 @@ class PhotoDrone:
         self.file = file
         self.photos_directory = directory
         self.filename = directory+file
+        self.has_gps_coordinates = False
+        self._initialize()
 
-        print(self.filename)
+    @classmethod
+    def fromAbsoluteFileName(self, file):
+        self.file = file
+        self.photos_directory = None
+        self.filename = file
+        self.has_gps_coordinates = False
+        self._initialize(self)
+        return self
 
+    def _initialize(self):
         # Read exifs
         with exiftool.ExifTool() as exifreader:
             image_exif = exifreader.get_metadata(self.filename)
 
-        self.gps_latitude = image_exif['Composite:GPSLatitude']
-        self.gps_latitude_dec = image_exif['Composite:GPSLatitude']
+        try:
 
-        self.gps_longitude = image_exif['Composite:GPSLongitude']
-        self.gps_longitude_dec = image_exif['Composite:GPSLongitude']
+            self.gps_latitude = image_exif['Composite:GPSLatitude']
+            self.gps_latitude_dec = image_exif['Composite:GPSLatitude']
 
-        #self.gps_altitude = image_exif[ 'Composite:GPSAltitude']
-        self.datetime_original = image_exif['EXIF:DateTimeOriginal']
+            self.gps_longitude = image_exif['Composite:GPSLongitude']
+            self.gps_longitude_dec = image_exif['Composite:GPSLongitude']
+
+            self.datetime_original = image_exif['EXIF:DateTimeOriginal']
+
+            self.epoch = datetime.datetime.strptime(
+            self.datetime_original, DATE_FORMAT).timestamp()
+
+            self.has_gps_coordinates = True
+
+            #self.gps_altitude = image_exif[ 'Composite:GPSAltitude']
+        except:
+            self.gps_latitude = None
+            self.gps_latitude_dec = None
+            self.gps_longitude = None
+            self.gps_longitude_dec = None
+            self.datetime_original = None
+            self.epoch = None
+            self.has_gps_coordinates = False
+            print('Image does not have GPS coordinates')
 
        # from IPython import embed; embed();sys.exit()
-
-        self.epoch = datetime.datetime.strptime(
-            self.datetime_original, DATE_FORMAT).timestamp()
 
         self.change_distance = False
         self.change_direction = False
@@ -115,6 +140,7 @@ class BlurScan:
     def __init__(self, photos_directory, regex):
         self.photos_directory = photos_directory
         self.images = []
+        self.imageIds = []
         self.images_nb = None
         self.average_distance = None
 
@@ -132,6 +158,7 @@ class BlurScan:
         # for each picture, create an photo_drone object
         for file in enumerate(files):
             self.images.append(PhotoDrone(self.photos_directory + '/', file[1]))
+            self.imageIds.append(0)
             # if i>255:
             #    break
 
@@ -141,10 +168,41 @@ class BlurScan:
             sys.exit(-1)
         print(len(files))
 
+    @classmethod
+    def fromInputFile(self, input_file, regex):
+        self.photos_directory = None
+        self.images = []
+        self.imageIds = []
+        self.images_nb = None
+        self.average_distance = None
+
+        all_files = []
+        with open(input_file, newline='') as csvfile:
+            csvreader = csv.reader(csvfile, delimiter=',')
+            for row in csvreader:
+                self.imageIds.append(row[0])
+                all_files.append(row[1])
+	
+        # for each picture, create an photo_drone object
+        for file in all_files:
+            print(file)
+            self.images.append(PhotoDrone.fromAbsoluteFileName(file))
+            # if i>255:
+            #    break
+
+        if len(all_files) == 0:
+            print(
+                F'Input file {input_file} does not contains images with this REGEX {regex}')
+            sys.exit(-1)
+        print(len(all_files))
+        return self
+
     def compute_data(self):
         first_image = True
 
         for image in self.images:
+            if not image.has_gps_coordinates:
+                continue
             if first_image:
                 image.distance = 0.0
                 image.direction = 0.0
@@ -152,14 +210,7 @@ class BlurScan:
                 image.first_image = True
                 first_image = False
                 image.delta_t = 0
-
             else:
-                image.first_image = False
-                image.delta_x = image.gps_longitude_dec-last_image.gps_longitude_dec
-                image.delta_y = image.gps_latitude_dec-last_image.gps_latitude_dec
-                image.delta_t = image.epoch-last_image.epoch
-                #last_image.distance = 10000*pow(pow(delta_x, 2)+pow(delta_y, 2), 0.5)
-                #image.distance = 100000*pow(pow(image.delta_x, 2)+pow(image.delta_y, 2), 0.5)
                 coords_1 = (image.gps_longitude_dec, image.gps_latitude_dec)
                 coords_2 = (last_image.gps_longitude_dec,
                             last_image.gps_latitude_dec)
@@ -194,6 +245,8 @@ class BlurScan:
 
         ##print('self.change_direction ')
         for image in self.images:
+            if not image.has_gps_coordinates:
+                continue
             image.percent_distance_difference = 100 * \
                 (image.distance - self.average_distance)/self.average_distance
 
@@ -239,17 +292,24 @@ class BlurScan:
 
 
 def main():
+    print(F' OPENCV is optimized : {cv2.useOptimized()}')
     parser = ArgumentParser(prog='drone_photos_scan',
                             description='Scan Drones pictures to detect blurry ones',
                             formatter_class=ArgumentDefaultsHelpFormatter)
 
-    parser.add_argument('-d', '--photos_directory', type=str, required=True,
+    parser.add_argument('-d', '--photos_directory', type=str, required=False,
                         help='The directory where drones pictures are. default is pwd')
+
+    parser.add_argument('-i', '--input_file', type=str, required=False,
+                        help='Path to the csv file containing [dataid,fileurl]')                    
 
     parser.add_argument('-r', '--regex',  type=str, required=False,
                         help='Regex expression to filter images. \
                         Default is ".*(jpg|jpeg|JPEG|JPG)"',
                         default='.*(jpg|jpeg|JPEG|JPG)')
+
+    parser.add_argument('-o', '--output_file',  type=str, required=True,
+                        help='Output CSV containing [dataId/filename,filter]"')
 
     parser.add_argument('-v', '--verbose', default=False,
                         action="store_true", dest="verbose",
@@ -258,59 +318,76 @@ def main():
     # parse the arguments
     args = parser.parse_args()
 
-    if not path.exists(args.photos_directory):
-        print(F'{args.photos_directory} does not exist')
-        sys.exit(-1)
-
-    # absolut and relative path
-    if not os.path.isabs(args.photos_directory):
-        args.photos_directory = os.path.abspath(args.photos_directory)
-
     if args.verbose:
         loglevel = logging.DEBUG
     else:
         loglevel = logging.CRITICAL
     logging.basicConfig(level=loglevel)
 
+    if not args.photos_directory and not args.input_file:
+        print('Please pass either photos_directory or input_file')
+        sys.exit(-1)
+
+    if args.input_file:
+        if not os.path.isabs(args.input_file):
+            print(F'{args.input_file} is not an absolute path')
+            sys.exit(-1)
+        if not path.exists(args.input_file):
+            print(F'{args.input_file} does not exist')
+            sys.exit(-1)       
+        project = BlurScan.fromInputFile(args.input_file, args.regex)
+        print(F'Using input file {args.input_file}')
+    elif args.photos_directory:
+        if not os.path.isabs(args.photos_directory):
+            print(F'{args.photos_directory} is not an absolute path')
+            sys.exit(-1)
+        if not path.exists(args.photos_directory):
+            print(F'{args.photos_directory} does not exist')
+            sys.exit(-1)        
+        print(F'Using photo directory file {args.photos_directory}')
+        project = BlurScan(args.photos_directory, args.regex)
+
 #########################################################
+    # print("Compute data")
+    # project.compute_data()
+    # print("check_changes")
+    # project.check_changes(direction_offset=40, distance_difference_limit=20)
 
-    project = BlurScan(args.photos_directory, args.regex)
-    print("Compute data")
-    project.compute_data()
-    print("check_changes")
-    project.check_changes(direction_offset=40, distance_difference_limit=20)
-
-    print(F"{'file': ^90}\t{'distance': ^10}\t{'%_dist_diff': ^10}\t{'direction': ^10}\t{'dir_diff': ^10}\t{'chg_dist': ^8}\t{'chg_dir': ^8}")
-
-    for image in project.images:
-        print('{: ^90}\t{:>10.2f}\t{:>10.2f}\t{:>10.2f}\t{:>10.2f}\t{: ^8}\t{: ^8}'
-              .format(image.filename, image.distance, image.percent_distance_difference,
-                      image.direction, image.direction_difference,
-                      image.change_distance, image.change_direction))
+    # print(F"{'file': ^90}\t{'distance': ^10}\t{'%_dist_diff': ^10}\t{'direction': ^10}\t{'dir_diff': ^10}\t{'chg_dist': ^8}\t{'chg_dir': ^8}")
+    # for image in project.images:
+    #     print('{: ^90}\t{:>10.2f}\t{:>10.2f}\t{:>10.2f}\t{:>10.2f}\t{: ^8}\t{: ^8}'
+    #           .format(image.filename, image.distance, image.percent_distance_difference,
+    #                   image.direction, image.direction_difference,
+    #                   image.change_distance, image.change_direction))
 
     print('The following images may be blurry')
     #print('{: ^90}\t{: ^10}\t{: ^10}\t{: ^10}\t{: ^10}\t{: ^8}\t{: ^8}'
     #      .format('file', 'distance', '%_dist_diff',
     #              'direction', 'dir_diff', 'chg_dist', 'chg_dir'))
     count = 0
+    
     count_laplacian = 0
-
-    for image in project.images:
-        if image.is_blurry:
+    output_data = []
+    for id, image in zip(project.imageIds, project.images):
+        #if image.is_blurry:
             # print('{: ^20}\t{:>10.2f}\t{:>10.2f}\t{:>10.2f}\t{:>10.2f}\t{: ^8}\t{: ^8}'
             #      .format(image.file, image.distance, image.percent_distance_difference,
             #              image.direction, image.direction_difference,
             #               image.change_distance, image.change_direction))
-            count_laplacian += compute_laplacian(
-                args.photos_directory+'/'+image.file)
+        is_blurry = compute_laplacian(image.filename)
+        count_laplacian += is_blurry
+        if is_blurry:
+            output_data.append([id, 'BLURRY'])
+        count = count+1
 
-            count = count+1
+    with open(args.output_file, 'w', newline='') as csvfile:
+        csvwriter = csv.writer(csvfile, delimiter=',', quoting=csv.QUOTE_MINIMAL)
+        csvwriter.writerows(output_data)
 
-    #print(str(count) + ' images may be blurry')
+
     print(str(count_laplacian) + ' images may be blurry with laplacian test')
 
    # from IPython import embed; embed()
-
 
 if __name__ == '__main__':
     main()

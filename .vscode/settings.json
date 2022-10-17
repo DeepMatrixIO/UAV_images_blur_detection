@@ -1,0 +1,15 @@
+{
+  "python.defaultInterpreterPath": "~/.venv/rasterqa/bin/python",
+  "python.terminal.activateEnvironment": true,
+  "python.autoComplete.extraPaths": [
+    "~/.venv/rasterqa/",
+    "~/.venv/rasterqa/lib",
+    "~/.venv/rasterqa/lib/python3.10/site-packages/",
+    "~/.venv/rasterqa/lib/python3.10/site-packages/cv2",
+],
+"python.analysis.extraPaths": [
+  "~/.venv/rasterqa/",
+  "~/.venv/rasterqa/lib",
+  "~/.venv/rasterqa/lib/python3.10/site-packages/"
+]
+}
