@@ -68,29 +68,24 @@ def compute_laplacian(image_path):
 
 
 class PhotoDrone:
-    def __init__(self, directory, file):
-        self.file = file
-        self.photos_directory = directory
-        self.filename = directory+file
-        self.has_gps_coordinates = False
+    def __init__(self, file, directory):
+        if directory:
+            self.file = file
+            self.photos_directory = directory
+            self.filename = directory+file
+            self.has_gps_coordinates = False
+        else:
+            self.file = file
+            self.photos_directory = None
+            self.filename = file
+            self.has_gps_coordinates = False
         self._initialize()
-
-    @classmethod
-    def fromAbsoluteFileName(self, file):
-        self.file = file
-        self.photos_directory = None
-        self.filename = file
-        self.has_gps_coordinates = False
-        self._initialize(self)
-        return self
 
     def _initialize(self):
         # Read exifs
         with exiftool.ExifTool() as exifreader:
             image_exif = exifreader.get_metadata(self.filename)
-
         try:
-
             self.gps_latitude = image_exif['Composite:GPSLatitude']
             self.gps_latitude_dec = image_exif['Composite:GPSLatitude']
 
@@ -157,7 +152,7 @@ class BlurScan:
 	
         # for each picture, create an photo_drone object
         for file in enumerate(files):
-            self.images.append(PhotoDrone(self.photos_directory + '/', file[1]))
+            self.images.append(PhotoDrone(file[1], self.photos_directory + '/'))
             self.imageIds.append(0)
             # if i>255:
             #    break
@@ -185,8 +180,7 @@ class BlurScan:
 	
         # for each picture, create an photo_drone object
         for file in all_files:
-            print(file)
-            self.images.append(PhotoDrone.fromAbsoluteFileName(file))
+            self.images.append(PhotoDrone(file, None))
             # if i>255:
             #    break
 
@@ -368,12 +362,14 @@ def main():
     
     count_laplacian = 0
     output_data = []
+    print('BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUURRRRRRRRRRRRRRRRRRR')
     for id, image in zip(project.imageIds, project.images):
         #if image.is_blurry:
             # print('{: ^20}\t{:>10.2f}\t{:>10.2f}\t{:>10.2f}\t{:>10.2f}\t{: ^8}\t{: ^8}'
             #      .format(image.file, image.distance, image.percent_distance_difference,
             #              image.direction, image.direction_difference,
             #               image.change_distance, image.change_direction))
+        print(id, image.filename)
         is_blurry = compute_laplacian(image.filename)
         count_laplacian += is_blurry
         if is_blurry:
